@@ -7,7 +7,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Inspiration4 Biomarker Profile Viewer", layout="wide")
 
-# CSS optimization to fit entire layout on 1080p display without vertical scrolling
+# CSS layout optimization for 1080p display viewing without vertical scrolling
 st.markdown("""
     <style>
         .block-container { padding-top: 1rem !important; padding-bottom: 0rem !important; }
@@ -31,29 +31,38 @@ def load_data(path):
 
 if os.path.exists(file_path):
     df_raw = load_data(file_path)
-    
-    # Direct column extraction ensuring Subject_ID, Timepoint, Value, and Analyte exist
     cols = list(df_raw.columns)
-    sub_c = next((c for c in cols if any(k in c.lower() for k in ["subject", "sample", "participant", "patient", "donor"])), cols[0])
-    tp_c = next((c for c in cols if any(k in c.lower() for k in ["time", "point", "tp", "visit", "stage"])), cols[1] if len(cols) > 1 else cols[0])
-    ana_c = next((c for c in cols if any(k in c.lower() for k in ["analyte", "biomarker", "target", "factor", "cytokine", "assay", "parameter", "test"])), None)
     
-    remaining_cols = [c for c in cols if c not in (sub_c, tp_c, ana_c)]
-    val_c = next((c for c in remaining_cols if any(k in c.lower() for k in ["val", "conc", "res", "result", "pg", "ng", "mg", "amount", "level", "reading"])), remaining_cols[-1] if remaining_cols else cols[-1])
+    # 1. Target / Analyte Column Detection
+    ana_c = next((c for c in cols if any(k in c.lower() for k in ["analyte", "biomarker", "target", "factor", "cytokine", "assay", "parameter", "test"])), None)
 
-    # Standardized DataFrame instantiation preventing KeyError exceptions
+    # 2. Subject / Astronaut ID Column Detection (mutually exclusive from Analyte)
+    sub_candidates = [c for c in cols if c != ana_c]
+    sub_c = next((c for c in sub_candidates if c.lower().strip() in ["subject_id", "subject", "subject id", "id", "sample_id", "sample id", "participant", "participant_id", "astronaut"]), None)
+    if not sub_c:
+        sub_c = next((c for c in sub_candidates if any(k in c.lower() for k in ["subject", "participant", "patient", "donor", "astronaut"]) or c.lower().strip() == "id"), sub_candidates[0])
+
+    # 3. Timepoint Column Detection
+    tp_candidates = [c for c in sub_candidates if c != sub_c]
+    tp_c = next((c for c in tp_candidates if any(k in c.lower() for k in ["time", "point", "tp", "visit", "stage", "phase"])), tp_candidates[0])
+
+    # 4. Value / Concentration Column Detection
+    val_candidates = [c for c in tp_candidates if c != tp_c]
+    val_c = next((c for c in val_candidates if any(k in c.lower() for k in ["val", "conc", "res", "result", "pg", "ng", "mg", "amount", "level", "reading"])), val_candidates[-1] if val_candidates else cols[-1])
+
+    # Standardized DataFrame instantiation ensuring Subject_ID maps to astronaut codes
     df = pd.DataFrame({
-        "Subject_ID": df_raw[sub_c],
-        "Timepoint": df_raw[tp_c],
+        "Subject_ID": df_raw[sub_c].astype(str).str.strip(),
+        "Timepoint": df_raw[tp_c].astype(str).str.strip(),
         "Value": df_raw[val_c],
-        "Analyte": df_raw[ana_c] if ana_c else "Biomarker"
+        "Analyte": df_raw[ana_c].astype(str).str.strip() if ana_c else "Biomarker"
     })
 
     # Dynamic Analyte Selector
-    analytes = sorted(df["Analyte"].dropna().astype(str).str.strip().unique())
+    analytes = sorted(df["Analyte"].dropna().unique())
     default_idx = next((i for i, a in enumerate(analytes) if a.upper() == "GLUCOSE"), 0)
     target_analyte = st.sidebar.selectbox("Select Biomarker / Analyte", analytes, index=default_idx)
-    df_filtered = df[df["Analyte"].astype(str).str.strip() == target_analyte].copy()
+    df_filtered = df[df["Analyte"] == target_analyte].copy()
 
     # Numeric Value Sanitization
     df_filtered["Value"] = pd.to_numeric(
@@ -63,7 +72,7 @@ if os.path.exists(file_path):
     
     # Timepoint Mapping
     timepoint_days = {"L-92": -92, "L-44": -44, "L-3": -3, "R+1": 4, "R+45": 48, "R+82": 85}
-    df_filtered["Days"] = df_filtered["Timepoint"].astype(str).str.strip().str.upper().map(timepoint_days)
+    df_filtered["Days"] = df_filtered["Timepoint"].str.upper().map(timepoint_days)
     
     # Clean dataset construction
     df_clean = df_filtered.dropna(subset=["Subject_ID", "Days", "Value"]).copy()
@@ -89,7 +98,7 @@ if os.path.exists(file_path):
             ax.axvline(0, color="#d32f2f", linestyle="--", linewidth=1.5, zorder=1, label="Launch (L=0)")
             ax.axvline(3, color="#1976d2", linestyle="--", linewidth=1.5, zorder=1, label="Return (R=0)")
 
-        # Layer 1 & 2: Trajectories & Population Ribbon
+        # Layer 1 & 2: Individual Trajectories & Population Summary Ribbon
         ax1.fill_between(summary_df["Days"], summary_df["q25"], summary_df["q75"], color="#bdbdbd", alpha=0.4, zorder=2, label="Group IQR")
         ax1.plot(summary_df["Days"], summary_df["median"], color="#212121", linewidth=2.5, zorder=3, label="Group Median")
 
