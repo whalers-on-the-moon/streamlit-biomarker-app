@@ -22,35 +22,46 @@ def load_data(path):
 
 if os.path.exists(file_path):
     df_raw = load_data(file_path)
-    col_map = {}
-    for col in df_raw.columns:
-        c = col.strip().lower()
-        if "subject" in c or "sample" in c:
-            col_map[col] = "Subject_ID"
-        elif "time" in c or "point" in c:
-            col_map[col] = "Timepoint"
-        elif "analyte" in c:
-            col_map[col] = "Analyte"
-        elif any(k in c for k in ["val", "conc", "res", "result"]):
-            col_map[col] = "Value"
+    
+    # Universal Dynamic Column Mapping for CMP and Eve Panel CSVs
+    cols = list(df_raw.columns)
+    sub_col = next((c for c in cols if any(k in c.lower() for k in ["subject", "sample", "participant", "patient", "donor"])), cols[0])
+    tp_col = next((c for c in cols if any(k in c.lower() for k in ["time", "point", "tp", "visit", "stage"])), cols[1] if len(cols) > 1 else cols[0])
+    ana_col = next((c for c in cols if any(k in c.lower() for k in ["analyte", "biomarker", "target", "factor", "cytokine", "assay", "parameter", "test"])), None)
+    val_col = next((c for c in cols if any(k in c.lower() for k in ["val", "conc", "res", "result", "pg", "ng", "mg", "amount", "level", "reading"])), cols[-1])
+
+    col_map = {sub_col: "Subject_ID", tp_col: "Timepoint", val_col: "Value"}
+    if ana_col:
+        col_map[ana_col] = "Analyte"
 
     df = df_raw.rename(columns=col_map).loc[:, lambda x: ~x.columns.duplicated()].copy()
 
+    # Dynamic Analyte Selector
     if "Analyte" in df.columns:
         analytes = sorted(df["Analyte"].dropna().astype(str).str.strip().unique())
         default_idx = next((i for i, a in enumerate(analytes) if a.upper() == "GLUCOSE"), 0)
         target_analyte = st.sidebar.selectbox("Select Biomarker / Analyte", analytes, index=default_idx)
-        df_filtered = df[df["Analyte"] == target_analyte].copy()
+        df_filtered = df[df["Analyte"].astype(str).str.strip() == target_analyte].copy()
     else:
         df_filtered = df.copy()
-        target_analyte = "Analyte"
+        target_analyte = "Biomarker"
 
-    df_filtered["Value"] = pd.to_numeric(df_filtered["Value"], errors="coerce")
+    # Numeric Value Cleaning & Transformation
+    df_filtered["Value"] = pd.to_numeric(
+        df_filtered["Value"].astype(str).str.replace(r"[^\d.-]", "", regex=True), 
+        errors="coerce"
+    )
+    
+    # Timepoint Mapping
     timepoint_days = {"L-92": -92, "L-44": -44, "L-3": -3, "R+1": 4, "R+45": 48, "R+82": 85}
-    df_filtered["Days"] = df_filtered["Timepoint"].astype(str).str.strip().map(timepoint_days)
+    df_filtered["Days"] = df_filtered["Timepoint"].astype(str).str.strip().str.upper().map(timepoint_days)
+    
+    # Clean dataset with required columns
     df_clean = df_filtered.dropna(subset=["Subject_ID", "Days", "Value"]).copy()
 
     if not df_clean.empty:
+        df_clean["Days"] = df_clean["Days"].astype(int)
+        
         summary_df = df_clean.groupby("Days")["Value"].agg(
             median="median",
             q25=lambda x: np.percentile(x, 25),
@@ -60,6 +71,7 @@ if os.path.exists(file_path):
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, gridspec_kw={"height_ratios": [2, 1]})
         fig.subplots_adjust(hspace=0.08)
 
+        # Layer 0: Continuous Mission Phase Shading & Event Boundaries
         for ax in (ax1, ax2):
             ax.axvspan(-100, 0, color="#e8f0fe", alpha=0.6, zorder=0, label="Pre-Flight")
             ax.axvspan(0, 3, color="#fce8e6", alpha=0.9, zorder=0, label="In-Flight (3d)")
@@ -67,6 +79,7 @@ if os.path.exists(file_path):
             ax.axvline(0, color="#d32f2f", linestyle="--", linewidth=1.5, zorder=1, label="Launch (L=0)")
             ax.axvline(3, color="#1976d2", linestyle="--", linewidth=1.5, zorder=1, label="Return (R=0)")
 
+        # Layer 1 & 2: Individual Trajectories & Population Summary Ribbon
         ax1.fill_between(summary_df["Days"], summary_df["q25"], summary_df["q75"], color="#bdbdbd", alpha=0.4, zorder=2, label="Group IQR")
         ax1.plot(summary_df["Days"], summary_df["median"], color="#212121", linewidth=2.5, zorder=3, label="Group Median")
 
@@ -76,14 +89,25 @@ if os.path.exists(file_path):
             sub_data = df_clean[df_clean["Subject_ID"] == sub].sort_values("Days")
             ax1.plot(sub_data["Days"], sub_data["Value"], marker="o", linewidth=1.5, color=palette[idx], zorder=4, label=str(sub))
 
+        # Layer 3: Distribution Boxplots
         unique_days = sorted(df_clean["Days"].unique())
         for day in unique_days:
             vals = df_clean[df_clean["Days"] == day]["Value"]
             ax2.boxplot(vals, positions=[day], widths=6, patch_artist=True, boxprops=dict(facecolor="#e0e0e0", zorder=2), medianprops=dict(color="black", zorder=3))
 
+        # Formatted x-axis ticks with integer days and staggered spacing for L-3 and R+1
         tp_labels = {v: k for k, v in timepoint_days.items()}
+        xtick_labels = []
+        for d in unique_days:
+            tp = tp_labels.get(d, "")
+            d_int = int(round(d))
+            if tp == "R+1":
+                xtick_labels.append(f"\n{tp}\n({d_int}d)")
+            else:
+                xtick_labels.append(f"{tp}\n({d_int}d)")
+
         ax2.set_xticks(unique_days)
-        ax2.set_xticklabels([f"{tp_labels.get(d, '')}\n({d}d)" for d in unique_days])
+        ax2.set_xticklabels(xtick_labels)
         ax2.set_xlim(-100, 90)
 
         ax1.set_ylabel(f"{target_analyte} Level", fontsize=11, fontweight="bold")
