@@ -6,6 +6,15 @@ import seaborn as sns
 import streamlit as st
 
 st.set_page_config(page_title="Inspiration4 Biomarker Profile Viewer", layout="wide")
+
+# CSS optimization to fit entire layout on 1080p display without vertical scrolling
+st.markdown("""
+    <style>
+        .block-container { padding-top: 1rem !important; padding-bottom: 0rem !important; }
+        h1 { font-size: 1.6rem !important; padding-bottom: 0.5rem !important; }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("Inspiration4 Astronaut Longitudinal Biomarker Profiles")
 
 dataset_options = {
@@ -23,30 +32,30 @@ def load_data(path):
 if os.path.exists(file_path):
     df_raw = load_data(file_path)
     
-    # Universal Dynamic Column Mapping for CMP and Eve Panel CSVs
+    # Direct column extraction ensuring Subject_ID, Timepoint, Value, and Analyte exist
     cols = list(df_raw.columns)
-    sub_col = next((c for c in cols if any(k in c.lower() for k in ["subject", "sample", "participant", "patient", "donor"])), cols[0])
-    tp_col = next((c for c in cols if any(k in c.lower() for k in ["time", "point", "tp", "visit", "stage"])), cols[1] if len(cols) > 1 else cols[0])
-    ana_col = next((c for c in cols if any(k in c.lower() for k in ["analyte", "biomarker", "target", "factor", "cytokine", "assay", "parameter", "test"])), None)
-    val_col = next((c for c in cols if any(k in c.lower() for k in ["val", "conc", "res", "result", "pg", "ng", "mg", "amount", "level", "reading"])), cols[-1])
+    sub_c = next((c for c in cols if any(k in c.lower() for k in ["subject", "sample", "participant", "patient", "donor"])), cols[0])
+    tp_c = next((c for c in cols if any(k in c.lower() for k in ["time", "point", "tp", "visit", "stage"])), cols[1] if len(cols) > 1 else cols[0])
+    ana_c = next((c for c in cols if any(k in c.lower() for k in ["analyte", "biomarker", "target", "factor", "cytokine", "assay", "parameter", "test"])), None)
+    
+    remaining_cols = [c for c in cols if c not in (sub_c, tp_c, ana_c)]
+    val_c = next((c for c in remaining_cols if any(k in c.lower() for k in ["val", "conc", "res", "result", "pg", "ng", "mg", "amount", "level", "reading"])), remaining_cols[-1] if remaining_cols else cols[-1])
 
-    col_map = {sub_col: "Subject_ID", tp_col: "Timepoint", val_col: "Value"}
-    if ana_col:
-        col_map[ana_col] = "Analyte"
-
-    df = df_raw.rename(columns=col_map).loc[:, lambda x: ~x.columns.duplicated()].copy()
+    # Standardized DataFrame instantiation preventing KeyError exceptions
+    df = pd.DataFrame({
+        "Subject_ID": df_raw[sub_c],
+        "Timepoint": df_raw[tp_c],
+        "Value": df_raw[val_c],
+        "Analyte": df_raw[ana_c] if ana_c else "Biomarker"
+    })
 
     # Dynamic Analyte Selector
-    if "Analyte" in df.columns:
-        analytes = sorted(df["Analyte"].dropna().astype(str).str.strip().unique())
-        default_idx = next((i for i, a in enumerate(analytes) if a.upper() == "GLUCOSE"), 0)
-        target_analyte = st.sidebar.selectbox("Select Biomarker / Analyte", analytes, index=default_idx)
-        df_filtered = df[df["Analyte"].astype(str).str.strip() == target_analyte].copy()
-    else:
-        df_filtered = df.copy()
-        target_analyte = "Biomarker"
+    analytes = sorted(df["Analyte"].dropna().astype(str).str.strip().unique())
+    default_idx = next((i for i, a in enumerate(analytes) if a.upper() == "GLUCOSE"), 0)
+    target_analyte = st.sidebar.selectbox("Select Biomarker / Analyte", analytes, index=default_idx)
+    df_filtered = df[df["Analyte"].astype(str).str.strip() == target_analyte].copy()
 
-    # Numeric Value Cleaning & Transformation
+    # Numeric Value Sanitization
     df_filtered["Value"] = pd.to_numeric(
         df_filtered["Value"].astype(str).str.replace(r"[^\d.-]", "", regex=True), 
         errors="coerce"
@@ -56,7 +65,7 @@ if os.path.exists(file_path):
     timepoint_days = {"L-92": -92, "L-44": -44, "L-3": -3, "R+1": 4, "R+45": 48, "R+82": 85}
     df_filtered["Days"] = df_filtered["Timepoint"].astype(str).str.strip().str.upper().map(timepoint_days)
     
-    # Clean dataset with required columns
+    # Clean dataset construction
     df_clean = df_filtered.dropna(subset=["Subject_ID", "Days", "Value"]).copy()
 
     if not df_clean.empty:
@@ -68,7 +77,8 @@ if os.path.exists(file_path):
             q75=lambda x: np.percentile(x, 75)
         ).reset_index()
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, gridspec_kw={"height_ratios": [2, 1]})
+        # Figure sized for 1080p display optimization
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 4.8), sharex=True, gridspec_kw={"height_ratios": [2, 1]})
         fig.subplots_adjust(hspace=0.08)
 
         # Layer 0: Continuous Mission Phase Shading & Event Boundaries
@@ -79,7 +89,7 @@ if os.path.exists(file_path):
             ax.axvline(0, color="#d32f2f", linestyle="--", linewidth=1.5, zorder=1, label="Launch (L=0)")
             ax.axvline(3, color="#1976d2", linestyle="--", linewidth=1.5, zorder=1, label="Return (R=0)")
 
-        # Layer 1 & 2: Individual Trajectories & Population Summary Ribbon
+        # Layer 1 & 2: Trajectories & Population Ribbon
         ax1.fill_between(summary_df["Days"], summary_df["q25"], summary_df["q75"], color="#bdbdbd", alpha=0.4, zorder=2, label="Group IQR")
         ax1.plot(summary_df["Days"], summary_df["median"], color="#212121", linewidth=2.5, zorder=3, label="Group Median")
 
@@ -95,32 +105,25 @@ if os.path.exists(file_path):
             vals = df_clean[df_clean["Days"] == day]["Value"]
             ax2.boxplot(vals, positions=[day], widths=6, patch_artist=True, boxprops=dict(facecolor="#e0e0e0", zorder=2), medianprops=dict(color="black", zorder=3))
 
-        # Formatted x-axis ticks with integer days and staggered spacing for L-3 and R+1
+        # Uniform horizontal level x-axis ticks with clean integer days
         tp_labels = {v: k for k, v in timepoint_days.items()}
-        xtick_labels = []
-        for d in unique_days:
-            tp = tp_labels.get(d, "")
-            d_int = int(round(d))
-            if tp == "R+1":
-                xtick_labels.append(f"\n{tp}\n({d_int}d)")
-            else:
-                xtick_labels.append(f"{tp}\n({d_int}d)")
+        xtick_labels = [f"{tp_labels.get(d, '')}\n({int(round(d))}d)" for d in unique_days]
 
         ax2.set_xticks(unique_days)
         ax2.set_xticklabels(xtick_labels)
         ax2.set_xlim(-100, 90)
 
-        ax1.set_ylabel(f"{target_analyte} Level", fontsize=11, fontweight="bold")
-        ax2.set_ylabel("Distribution", fontsize=11, fontweight="bold")
-        ax2.set_xlabel("Mission Timepoint (Days Relative to Launch)", fontsize=11, fontweight="bold")
-        ax1.set_title(f"Inspiration4 Astronauts: Longitudinal {target_analyte} Profile", fontsize=14, fontweight="bold", pad=12)
+        ax1.set_ylabel(f"{target_analyte} Level", fontsize=10, fontweight="bold")
+        ax2.set_ylabel("Distribution", fontsize=10, fontweight="bold")
+        ax2.set_xlabel("Mission Timepoint (Days Relative to Launch)", fontsize=10, fontweight="bold")
+        ax1.set_title(f"Inspiration4 Astronauts: Longitudinal {target_analyte} Profile", fontsize=12, fontweight="bold", pad=10)
 
         ax1.grid(True, linestyle=":", alpha=0.6, zorder=0)
         ax2.grid(True, linestyle=":", alpha=0.6, zorder=0)
 
         handles, labels = ax1.get_legend_handles_labels()
-        ax1.legend(handles, labels, loc="upper left", frameon=True, facecolor="white", framealpha=0.9, ncols=2)
+        ax1.legend(handles, labels, loc="upper left", frameon=True, facecolor="white", framealpha=0.9, ncols=2, fontsize=8)
 
-        st.pyplot(fig)
+        st.pyplot(fig, use_container_width=True)
 else:
     st.error(f"Dataset non-existent: {file_path}")
