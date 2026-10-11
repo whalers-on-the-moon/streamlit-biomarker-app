@@ -286,13 +286,7 @@ if os.path.exists(file_path):
         " (3d to 90d)",
         unsafe_allow_html=True,
     )
-    st.sidebar.markdown("🔴 Launch (L=0) | 🔵 Return (R=0)")
-
-    st.sidebar.markdown("**Group Statistics**")
-    st.sidebar.markdown(
-        "⬛ **Group Median**<br>🩶 **Group IQR**", unsafe_allow_html=True
-    )
-
+   
     st.sidebar.markdown("**Astronaut Trajectories**")
     for idx, sub in enumerate(subjects):
       rgb = palette[idx]
